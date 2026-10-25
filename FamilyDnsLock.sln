@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FamilyDnsLock.Core", "src\FamilyDnsLock.Core\FamilyDnsLock.Core.csproj", "{982B610F-AC20-466C-9B24-4203656767DD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FamilyDnsLock.Service", "src\FamilyDnsLock.Service\FamilyDnsLock.Service.csproj", "{A22B05B8-2A92-49B0-B115-74C4A548BE93}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FamilyDnsLock.Tests", "tests\FamilyDnsLock.Tests\FamilyDnsLock.Tests.csproj", "{C08B6DE0-3F4E-435F-BFB2-1905680C96BF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{982B610F-AC20-466C-9B24-4203656767DD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{982B610F-AC20-466C-9B24-4203656767DD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{982B610F-AC20-466C-9B24-4203656767DD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{982B610F-AC20-466C-9B24-4203656767DD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A22B05B8-2A92-49B0-B115-74C4A548BE93}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A22B05B8-2A92-49B0-B115-74C4A548BE93}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A22B05B8-2A92-49B0-B115-74C4A548BE93}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A22B05B8-2A92-49B0-B115-74C4A548BE93}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C08B6DE0-3F4E-435F-BFB2-1905680C96BF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C08B6DE0-3F4E-435F-BFB2-1905680C96BF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C08B6DE0-3F4E-435F-BFB2-1905680C96BF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C08B6DE0-3F4E-435F-BFB2-1905680C96BF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
