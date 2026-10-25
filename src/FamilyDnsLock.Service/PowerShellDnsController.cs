@@ -8,17 +8,21 @@ namespace FamilyDnsLock.Service;
 
 internal sealed class PowerShellDnsController
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
     public async Task<IReadOnlyList<NetworkAdapter>> GetActivePhysicalAdaptersAsync(CancellationToken cancellationToken)
     {
-        const string script = "Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } | " +
-            "Select-Object @{Name='InterfaceIndex';Expression={$_.ifIndex}},Name | ConvertTo-Json -Compress";
+        const string script = @"
+$adapters = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
+if (-not $adapters) { '[]'; exit }
+$result = foreach ($a in $adapters) {
+    [PSCustomObject]@{
+        InterfaceIndex = [int]$a.ifIndex
+        Name = [string]$a.Name
+    }
+}
+$result | ConvertTo-Json -Compress
+";
         var json = await RunPowerShellAsync(script, cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "null")
+        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "null" || json.Trim() == "[]")
         {
             return [];
         }
@@ -34,6 +38,45 @@ internal sealed class PowerShellDnsController
             .ToArray();
     }
 
+    public async Task<AdapterDnsSnapshot> CaptureSnapshotAsync(int interfaceIndex, string adapterName, CancellationToken cancellationToken)
+    {
+        var script = $@"
+$idx = {interfaceIndex}
+$dns = Get-DnsClientServerAddress -InterfaceIndex $idx -ErrorAction SilentlyContinue
+$v4Dns = @($dns | Where-Object {{ $_.AddressFamily -eq 2 }} | ForEach-Object {{ $_.ServerAddresses }})
+$v6Dns = @($dns | Where-Object {{ $_.AddressFamily -eq 23 }} | ForEach-Object {{ $_.ServerAddresses }})
+
+$v4If = Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue
+$v6If = Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv6 -ErrorAction SilentlyContinue
+
+$v4Dhcp = if ($v4If -and $v4If.Dhcp -eq 'Enabled') {{ $true }} else {{ $false }}
+$v6Dhcp = if ($v6If -and ($v6If.Dhcp -eq 'Enabled' -or $v6If.RouterDiscovery -eq 'Enabled')) {{ $true }} else {{ $false }}
+
+[PSCustomObject]@{{
+    InterfaceIndex = $idx
+    InterfaceName = '{adapterName}'
+    Ipv4Servers = @($v4Dns)
+    Ipv6Servers = @($v6Dns)
+    Ipv4IsDhcp = $v4Dhcp
+    Ipv6IsDhcp = $v6Dhcp
+}} | ConvertTo-Json -Compress
+";
+        var json = await RunPowerShellAsync(script, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return new AdapterDnsSnapshot(interfaceIndex, adapterName, [], [], true, true);
+        }
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var v4Servers = root.GetProperty("Ipv4Servers").EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToArray();
+        var v6Servers = root.GetProperty("Ipv6Servers").EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToArray();
+        var v4Dhcp = root.GetProperty("Ipv4IsDhcp").GetBoolean();
+        var v6Dhcp = root.GetProperty("Ipv6IsDhcp").GetBoolean();
+
+        return new AdapterDnsSnapshot(interfaceIndex, adapterName, v4Servers, v6Servers, v4Dhcp, v6Dhcp);
+    }
+
     public async Task ApplyAsync(int interfaceIndex, DnsProvider provider, CancellationToken cancellationToken)
     {
         if (interfaceIndex < 1)
@@ -41,9 +84,8 @@ internal sealed class PowerShellDnsController
             throw new ArgumentOutOfRangeException(nameof(interfaceIndex));
         }
 
-        var addresses = string.Join(",", provider.Servers.Select(address => $"'{IPAddress.Parse(address.ToString())}'"));
-        var script = $"Set-DnsClientServerAddress -InterfaceIndex {interfaceIndex} " +
-            $"-ServerAddresses @({addresses}) -ErrorAction Stop";
+        var addresses = string.Join(",", provider.Servers.Select(address => $"'{address}'"));
+        var script = $"Set-DnsClientServerAddress -InterfaceIndex {interfaceIndex} -ServerAddresses @({addresses}) -ErrorAction Stop";
         await RunPowerShellAsync(script, cancellationToken).ConfigureAwait(false);
     }
 
@@ -54,7 +96,7 @@ internal sealed class PowerShellDnsController
             throw new ArgumentOutOfRangeException(nameof(interfaceIndex));
         }
 
-        var script = $"Get-DnsClientServerAddress -InterfaceIndex {interfaceIndex} | " +
+        var script = $"Get-DnsClientServerAddress -InterfaceIndex {interfaceIndex} -ErrorAction SilentlyContinue | " +
             "ForEach-Object { $_.ServerAddresses } | ConvertTo-Json -Compress";
         var json = await RunPowerShellAsync(script, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(json) || json.Trim() == "null")
@@ -64,7 +106,7 @@ internal sealed class PowerShellDnsController
 
         using var document = JsonDocument.Parse(json);
         return document.RootElement.ValueKind == JsonValueKind.Array
-            ? document.RootElement.EnumerateArray().Select(value => value.GetString() ?? string.Empty).ToArray()
+            ? document.RootElement.EnumerateArray().Select(value => value.GetString() ?? string.Empty).Where(s => !string.IsNullOrEmpty(s)).ToArray()
             : [document.RootElement.GetString() ?? string.Empty];
     }
 
@@ -74,26 +116,35 @@ internal sealed class PowerShellDnsController
     {
         foreach (var snapshot in snapshots)
         {
-            var servers = snapshot.Ipv4Servers.Concat(snapshot.Ipv6Servers)
-                .Select(IPAddress.Parse)
-                .Distinct()
-                .ToArray();
-            if (servers.Length == 0)
+            // If IPv4 was DHCP, reset server addresses to DHCP instead of setting static IPs
+            if (snapshot.Ipv4IsDhcp && snapshot.Ipv6IsDhcp)
             {
-                var resetScript = $"Set-DnsClientServerAddress -InterfaceIndex {snapshot.InterfaceIndex} " +
-                    "-ResetServerAddresses -ErrorAction Stop";
+                var resetScript = $"Set-DnsClientServerAddress -InterfaceIndex {snapshot.InterfaceIndex} -ResetServerAddresses -ErrorAction SilentlyContinue";
                 await RunPowerShellAsync(resetScript, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
-            var addresses = string.Join(",", servers.Select(address => $"'{IPAddress.Parse(address)}'"));
-            var script = $"Set-DnsClientServerAddress -InterfaceIndex {snapshot.InterfaceIndex} " +
-                $"-ServerAddresses @({addresses}) -ErrorAction Stop";
-            await RunPowerShellAsync(script, cancellationToken).ConfigureAwait(false);
+            var servers = snapshot.Ipv4Servers.Concat(snapshot.Ipv6Servers)
+                .Where(s => IPAddress.TryParse(s, out _))
+                .Select(IPAddress.Parse)
+                .Distinct()
+                .ToArray();
+
+            if (servers.Length == 0)
+            {
+                var resetScript = $"Set-DnsClientServerAddress -InterfaceIndex {snapshot.InterfaceIndex} -ResetServerAddresses -ErrorAction SilentlyContinue";
+                await RunPowerShellAsync(resetScript, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var addresses = string.Join(",", servers.Select(address => $"'{address}'"));
+                var script = $"Set-DnsClientServerAddress -InterfaceIndex {snapshot.InterfaceIndex} -ServerAddresses @({addresses}) -ErrorAction SilentlyContinue";
+                await RunPowerShellAsync(script, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
-    private static async Task<string> RunPowerShellAsync(string script, CancellationToken cancellationToken)
+    public static async Task<string> RunPowerShellAsync(string script, CancellationToken cancellationToken)
     {
         var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
         var startInfo = new ProcessStartInfo

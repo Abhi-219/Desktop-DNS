@@ -18,7 +18,9 @@ public sealed record AdapterDnsSnapshot(
     int InterfaceIndex,
     string InterfaceName,
     IReadOnlyList<string> Ipv4Servers,
-    IReadOnlyList<string> Ipv6Servers);
+    IReadOnlyList<string> Ipv6Servers,
+    bool Ipv4IsDhcp = false,
+    bool Ipv6IsDhcp = false);
 
 public sealed record ProtectionState(
     ProtectionStatus Status,
@@ -27,7 +29,15 @@ public sealed record ProtectionState(
     ExpiryAction? ExpiryAction,
     string ProviderName,
     IReadOnlyList<string> ProviderServers,
-    IReadOnlyList<AdapterDnsSnapshot> PreviousDns)
+    IReadOnlyList<AdapterDnsSnapshot> PreviousDns,
+    string? PinHash = null,
+    string? PinSalt = null,
+    string? RecoveryKeyHash = null,
+    string? RecoveryKeySalt = null,
+    int FailedPinAttempts = 0,
+    DateTimeOffset? LockoutUntilUtc = null,
+    DateTimeOffset? UninstallAuthorizedUntilUtc = null,
+    DateTimeOffset? AggressiveEnforcementUntilUtc = null)
 {
     public static ProtectionState Empty { get; } = new(
         ProtectionStatus.Inactive,
@@ -41,10 +51,35 @@ public sealed record ProtectionState(
     public bool IsActiveAt(DateTimeOffset now) =>
         Status == ProtectionStatus.Active && ExpiresUtc is { } expires && now < expires;
 
+    public bool IsPinConfigured => !string.IsNullOrEmpty(PinHash) && !string.IsNullOrEmpty(PinSalt);
+
+    public bool IsLockedOutAt(DateTimeOffset now) =>
+        LockoutUntilUtc is { } lockout && now < lockout;
+
+    public TimeSpan? GetLockoutRemaining(DateTimeOffset now)
+    {
+        if (LockoutUntilUtc is { } lockout && now < lockout)
+        {
+            return lockout - now;
+        }
+        return null;
+    }
+
+    public bool IsUninstallAuthorizedAt(DateTimeOffset now) =>
+        UninstallAuthorizedUntilUtc is { } authUntil && now < authUntil;
+
     public ProtectionState Expire() => ExpiryAction switch
     {
-        ExpiryAction.KeepFilteredDns => this with { Status = ProtectionStatus.ExpiredFilteredDnsRetained },
-        ExpiryAction.RestorePreviousDns => this with { Status = ProtectionStatus.ExpiredDnsRestored },
+        global::FamilyDnsLock.Core.ExpiryAction.KeepFilteredDns => this with
+        {
+            Status = ProtectionStatus.ExpiredFilteredDnsRetained,
+            AggressiveEnforcementUntilUtc = null
+        },
+        global::FamilyDnsLock.Core.ExpiryAction.RestorePreviousDns => this with
+        {
+            Status = ProtectionStatus.ExpiredDnsRestored,
+            AggressiveEnforcementUntilUtc = null
+        },
         _ => throw new InvalidOperationException("An active lock must have an expiry action.")
     };
 }
@@ -56,7 +91,11 @@ public static class ProtectionStateFactory
         DateTimeOffset expiresUtc,
         ExpiryAction expiryAction,
         DnsProvider provider,
-        IReadOnlyList<AdapterDnsSnapshot> snapshots)
+        IReadOnlyList<AdapterDnsSnapshot> snapshots,
+        string? pinHash = null,
+        string? pinSalt = null,
+        string? recoveryKeyHash = null,
+        string? recoveryKeySalt = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(snapshots);
@@ -75,7 +114,11 @@ public static class ProtectionStateFactory
             expiryAction,
             provider.Name,
             provider.Servers.Select(server => server.ToString()).ToArray(),
-            snapshots.ToArray());
+            snapshots.ToArray(),
+            pinHash,
+            pinSalt,
+            recoveryKeyHash,
+            recoveryKeySalt);
     }
 }
 

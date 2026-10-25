@@ -4,5 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <BuildInParallel>false</BuildInParallel>
+    <MaxNodeCount>1</MaxNodeCount>
   </PropertyGroup>
 </Project>
